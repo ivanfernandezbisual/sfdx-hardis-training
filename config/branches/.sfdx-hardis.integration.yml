@@ -7,7 +7,7 @@
 # a shortcut for throwaway training orgs only. Lab 3.1 replaces it with an External
 # Client App and JWT.
 
-targetUsername: test-rh4xoeotnl1w@example.com
+targetUsername: test-rub39c4plhx1@example.com
 instanceUrl: https://test.salesforce.com
 
 mergeTargets: [uat]
