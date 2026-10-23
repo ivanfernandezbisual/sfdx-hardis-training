@@ -62,4 +62,26 @@ private class InstallationSchedulerTest {
         Test.stopTest();
         System.assert(!ready.isEmpty(), 'The planned installation should be listed');
     }
+
+    @isTest
+    static void schedulableOnRefusesBeforeThePanelsArrive() {
+        Installation__c inst = [SELECT Id FROM Installation__c WHERE External_Id__c = 'TEST-INST-001' LIMIT 1];
+        List<Id> ids = new List<Id>{ inst.Id };
+        Test.startTest();
+        List<Id> today = InstallationScheduler.schedulableOn(ids, Date.today());
+        List<Id> later = InstallationScheduler.schedulableOn(ids, Date.today().addDays(60));
+        Test.stopTest();
+        System.assertEquals(0, today.size(), 'The panels have not arrived yet, so no crew can go today');
+        System.assertEquals(1, later.size(), 'Once the panels are in and prepared, the installation can be scheduled');
+    }
+
+    @isTest
+    static void schedulableOnIgnoresInstallationsWithNoBatch() {
+        Installation__c lonely = new Installation__c(Status__c = 'Planned', Crew_Size__c = 2, External_Id__c = 'TEST-INST-003');
+        insert lonely;
+        Test.startTest();
+        List<Id> allowed = InstallationScheduler.schedulableOn(new List<Id>{ lonely.Id }, Date.today().addDays(30));
+        Test.stopTest();
+        System.assertEquals(0, allowed.size(), 'An installation with no panel batch cannot be scheduled');
+    }
 }
