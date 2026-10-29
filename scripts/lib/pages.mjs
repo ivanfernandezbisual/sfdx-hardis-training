@@ -1,6 +1,7 @@
 /**
  * The pages this site generates rather than writes: the backlog, one page per
- * User Story, the badges index and one page per badge holder.
+ * User Story, the badges index, one page per badge holder, the statistics and
+ * the Guinea Run Hall of Fame.
  *
  * They are built here, once, and called with the words of a locale, so the
  * French backlog cannot drift from the English one: what differs between them
@@ -13,9 +14,27 @@
  * is published.
  */
 import { fill } from "./strings.mjs";
+import { duration } from "../stats/lab-times.mjs";
+import { rankGeneral, rankWorld, rankPinball, rankOrgman, avatarUrl, isHandle, WORLD_COUNT } from "../../site-theme/javascripts/guinea-run/core/hof.js";
+import { translator } from "../../site-theme/javascripts/guinea-run/texts.js";
+
+// How many players each table of the Hall of Fame shows
+const HALL_OF_FAME_TOP = 50;
 
 const separator = (columns) => `|${columns.map(() => "---").join("|")}|`;
 const row = (cells) => `| ${cells.join(" | ")} |`;
+
+/**
+ * When a badge was awarded, as something that sorts: the moment the claim
+ * passed, or the day alone for a record written before the time was kept.
+ */
+const awardTime = (badge) => String(badge.issuedAt || badge.issuedOn || "");
+
+/** The same, as the badges index prints it: the day and the minute, in UTC. */
+const awardedAt = (s, badge) => {
+  const match = /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})/.exec(awardTime(badge));
+  return match ? fill(s.badges.awardedAt, { date: match[1], time: match[2] }) : awardTime(badge);
+};
 
 /**
  * The backlog: the table of the stories, each one in full, and the team.
@@ -92,19 +111,39 @@ export function storyPage({ universe, s, text, story, owner, labLink, backlogLin
   ].join("\n");
 }
 
-/** The badges index: everybody who claimed one, and how to claim yours. */
-export function badgesPage({ s, holders, badgeHref, badgeImage, claimUrl, recordUrlPattern, bannerExample }) {
-  const rows = holders.map((holder) => {
+/**
+ * The badges index: everybody who claimed one, and how to claim yours.
+ *
+ * One table per badge, the highest level first, and each holder once, under the
+ * highest badge they earned. Inside a table the latest award comes first, so the
+ * top rows are who just got a badge.
+ */
+export function badgesPage({ s, holders, totals, badgeHref, badgeImage, claimUrl, recordUrlPattern, bannerExample }) {
+  const holderRow = (holder) => {
     // An <img> and not markdown: the badge is drawn 320 square, and a table cell
     // wants a thumbnail. Plain HTML sizes it without depending on an extension.
-    const image = holder.highest
-      ? `<img src="${badgeImage(holder.key, holder.highest.level)}" alt="${holder.highest.name}" width="72"/>`
-      : "";
+    const image = `<img src="${badgeImage(holder.key, holder.highest.level)}" alt="${holder.highest.name}" width="72"/>`;
     const trailblazer = holder.trailblazer
       ? `[${holder.trailblazer}](https://www.salesforce.com/trailblazer/${holder.trailblazer})`
       : "";
     const github = holder.recipient ? `[@${holder.recipient}](https://github.com/${holder.recipient})` : "";
-    return row([image, `[${holder.name}](${badgeHref(holder.key)})`, holder.highest ? holder.highest.name : "", github, trailblazer]);
+    return row([image, `[${holder.name}](${badgeHref(holder.key)})`, awardedAt(s, holder.highest), github, trailblazer]);
+  };
+  const levels = [...new Set(holders.filter((holder) => holder.highest).map((holder) => holder.highest.level))]
+    .sort((one, other) => other - one);
+  const tables = levels.flatMap((level) => {
+    const group = holders
+      .filter((holder) => holder.highest && holder.highest.level === level)
+      // sort() is stable: two awards of the same second stay in name order
+      .sort((one, other) => awardTime(other.highest).localeCompare(awardTime(one.highest)));
+    return [
+      `## ${group[0].highest.name}`,
+      "",
+      row(s.badges.columns),
+      separator(s.badges.columns),
+      ...group.map(holderRow),
+      ""
+    ];
   });
 
   return [
@@ -112,8 +151,11 @@ export function badgesPage({ s, holders, badgeHref, badgeImage, claimUrl, record
     "",
     ...s.badges.intro,
     "",
-    holders.length === 0 ? s.badges.nobody : [row(s.badges.columns), separator(s.badges.columns), ...rows].join("\n"),
-    "",
+    // How many of each badge were awarded, when there is one to count
+    ...(totals && totals.some((one) => one.count > 0)
+      ? [s.badges.totals, "", ...totals.map((one) => `- **${one.count}** ${one.badge}`), ""]
+      : []),
+    ...(tables.length === 0 ? [s.badges.nobody, ""] : tables),
     `## ${s.badges.claim.heading}`,
     "",
     ...s.badges.claim.body.map((line) => fill(line, { claimUrl })),
@@ -143,6 +185,188 @@ export function badgesPage({ s, holders, badgeHref, badgeImage, claimUrl, record
         ]
       : [])
   ].join("\n");
+}
+
+/**
+ * The statistics of the course: who starts and finishes each level, and how
+ * long the labs take next to what they announce.
+ *
+ * stats is stats/course-stats.json, which scripts/stats/course-stats.mjs writes
+ * once a week, or null before its first run. It holds counts and medians: a
+ * median over too few learners is null there, and reads "not enough data" here.
+ */
+export function statsPage({ s, text, universe, stats }) {
+  const w = s.stats;
+  if (!stats) {
+    return [`# ${w.heading}`, "", w.empty, ""].join("\n");
+  }
+  const levelName = (level) => {
+    const found = universe.levels.find((one) => one.level === level);
+    return fill(w.level, { level, name: found ? text.level(found) : "" });
+  };
+  const share = (part, whole) => (whole > 0 ? fill(w.percent, { value: Math.round((part / whole) * 100) }) : "");
+  const announced = (row) => (typeof row.announcedMinutes === "number" ? duration(row.announcedMinutes) : "");
+  const measured = (row) => (typeof row.medianMinutes === "number" ? duration(row.medianMinutes) : w.notEnough);
+  // The fastest time the lab could be done in, which the figures already sorted out
+  const fastest = (one) => (typeof one.fastestMinutes === "number" ? duration(one.fastestMinutes) : "");
+  const figures = (one) => [announced(one), measured(one), fastest(one), one.sample];
+  const labs = (list) => (list.length === 1
+    ? fill(w.lab, { lab: list[0] })
+    : fill(list.length === 2 ? w.labsPair : w.labs, { first: list[0], last: list[list.length - 1] }));
+
+  const lines = [
+    `# ${w.heading}`,
+    "",
+    ...w.intro.map((line) => fill(line, { date: String(stats.generatedAt).slice(0, 10), learners: stats.learners })),
+    "",
+    `## ${w.funnel.heading}`,
+    "",
+    ...w.funnel.intro,
+    "",
+    row(w.funnel.columns),
+    separator(w.funnel.columns),
+    ...stats.levels.map((level) => row([
+      levelName(level.level),
+      level.started,
+      share(level.started, stats.learners),
+      level.completed,
+      share(level.completed, level.started)
+    ])),
+    "",
+    `## ${w.time.heading}`,
+    "",
+    ...w.time.intro.map((line) => fill(line, { cutoff: stats.idleCutoffMinutes, minSample: stats.minSample })),
+    "",
+    row(w.time.levelColumns),
+    separator(w.time.levelColumns),
+    ...stats.levels.map((level) => row([levelName(level.level), ...figures(level)])),
+    ""
+  ];
+  for (const level of stats.levels) {
+    const segments = stats.segments.filter((segment) => segment.level === level.level);
+    // A level nobody was timed through yet has its row above, and no table of its own
+    if (segments.every((segment) => typeof segment.medianMinutes !== "number")) {
+      continue;
+    }
+    lines.push(`### ${levelName(level.level)}`, "", row(w.time.labColumns), separator(w.time.labColumns));
+    for (const segment of segments) {
+      lines.push(row([labs(segment.labs), ...figures(segment)]));
+    }
+    lines.push("");
+  }
+  // Lab by lab, from the learners whose receipts say when each lab passed
+  const byLab = (stats.labs || []).filter((lab) => typeof lab.medianMinutes === "number");
+  if (byLab.length > 0) {
+    lines.push(`### ${w.time.byLab.heading}`, "", ...w.time.byLab.intro, "", row(w.time.labColumns), separator(w.time.labColumns));
+    for (const lab of byLab) {
+      lines.push(row([fill(w.lab, { lab: lab.lab }), ...figures(lab)]));
+    }
+    lines.push("");
+  }
+  lines.push(`## ${w.method.heading}`, "", ...w.method.body.map((line) => fill(line, { cutoff: stats.idleCutoffMinutes, minSample: stats.minSample })), "");
+  return lines.join("\n");
+}
+
+/**
+ * The Guinea Run Hall of Fame: the overall top, the top of each world, then
+ * the tops of the bonuses, Pipeline Pinball and Org-Man.
+ *
+ * board is hall-of-fame/hall-of-fame.json, which the hall-of-fame workflow
+ * writes. The rankings come from the game's own core/hof.js, so the page, the
+ * game and the answer on the issue agree. The world names are the game's.
+ *
+ * badgeHref(handle) is the badge page of a player, or null. badgeImage(handle,
+ * level) is the picture of that badge, or null for a text mark.
+ */
+export function hallOfFamePage({ s, board, badgeHref, badgeImage }) {
+  const w = s.hallOfFame;
+  const t = translator(s.lang || "en");
+  const seconds = new Intl.NumberFormat(s.lang || "en", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+  // A handle the board holds is checked again: it is printed into HTML
+  const top = (list) => list.filter((p) => isHandle(p.handle)).slice(0, HALL_OF_FAME_TOP);
+  const avatar = (handle) =>
+    `<img class="off-glb" src="${avatarUrl(handle, 48)}" width="24" height="24" alt="" loading="lazy" referrerpolicy="no-referrer"/>`;
+  const badge = (p) => {
+    if (!(p.badge > 0)) {
+      return "";
+    }
+    const alt = fill(w.badgeAlt, { level: p.badge });
+    const image = badgeImage ? badgeImage(p.handle, p.badge) : null;
+    const mark = image ? `<img class="off-glb" src="${image}" width="24" height="24" alt="${alt}" title="${alt}"/>` : alt;
+    const href = badgeHref ? badgeHref(p.handle) : null;
+    return href ? `[${mark}](${href})` : mark;
+  };
+  // The avatar, the handle and the badge share one cell: as separate columns
+  // they made every board too wide for a phone
+  const player = (p, withBadge) =>
+    [avatar(p.handle), `[${p.handle}](https://github.com/${p.handle})`, withBadge ? badge(p) : ""].filter(Boolean).join(" ");
+  // Numbers line up on the right, the other columns (named in `left`) on the left
+  const header = (columns, left = [0, 1]) => [
+    row(columns),
+    `|${columns.map((_, i) => (left.includes(i) ? "---" : "---:")).join("|")}|`
+  ];
+  const boss = (ms) => (typeof ms === "number" ? fill(w.seconds, { value: seconds.format(ms / 1000) }) : "-");
+
+  const lines = [`# ${w.heading}`, "", ...w.intro, ""];
+  const general = top(rankGeneral(board));
+  const pinball = top(rankPinball(board));
+  const orgman = top(rankOrgman(board));
+  if (general.length === 0 && pinball.length === 0 && orgman.length === 0) {
+    lines.push(w.empty, "");
+    return lines.join("\n");
+  }
+  if (board.updatedAt) {
+    lines.push(fill(w.updated, { date: String(board.updatedAt).slice(0, 10) }), "");
+  }
+  lines.push(
+    // The boards sit in one block the stylesheet makes compact on a phone
+    `<div class="gr-hof" markdown>`,
+    "",
+    `## ${w.general.heading}`,
+    "",
+    fill(w.general.intro, { count: HALL_OF_FAME_TOP }),
+    "",
+    ...header(w.generalColumns),
+    ...general.map((p, i) => row([i + 1, player(p, true), p.total, p.stars])),
+    ""
+  );
+  // The bonus table right after the total: both are one board for the whole game
+  const number = new Intl.NumberFormat(s.lang || "en");
+  lines.push(`## ${w.pinball.heading}`, "", fill(w.pinball.intro, { count: HALL_OF_FAME_TOP }), "");
+  if (pinball.length === 0) {
+    lines.push(w.pinball.empty, "");
+  } else {
+    lines.push(
+      ...header(w.pinball.columns),
+      ...pinball.map((p, i) => row([i + 1, player(p, true), number.format(p.score), p.level, p.missions, Math.max(1, Math.round(p.ms / 60000))])),
+      ""
+    );
+  }
+  lines.push(`## ${w.orgman.heading}`, "", fill(w.orgman.intro, { count: HALL_OF_FAME_TOP }), "");
+  if (orgman.length === 0) {
+    lines.push(w.orgman.empty, "");
+  } else {
+    lines.push(
+      ...header(w.orgman.columns),
+      ...orgman.map((p, i) => row([i + 1, player(p, true), number.format(p.score), p.level, p.admins, Math.max(1, Math.round(p.ms / 60000))])),
+      ""
+    );
+  }
+  lines.push(`## ${w.worlds.heading}`, "", fill(w.worlds.intro, { count: HALL_OF_FAME_TOP }), "");
+  for (let n = 0; n < WORLD_COUNT; n++) {
+    const title = fill(w.world, { n, name: t(`w${n}_name`) }).replace(/"/g, "'");
+    const list = top(rankWorld(board, n));
+    lines.push(`??? note "${title}"`, "");
+    const body = list.length === 0
+      ? [w.worldEmpty]
+      : [
+          ...header(w.worldColumns, [0, 1, 3]),
+          ...list.map((p, i) => row([i + 1, player(p, false), p.score, t(`mode_${p.mode}`), p.stars, boss(p.bossMs)]))
+        ];
+    lines.push(...body.map((line) => `    ${line}`), "");
+  }
+  lines.push("</div>", "");
+  return lines.join("\n");
 }
 
 /** The name of the highest badge a holder earned, as a post says it. */
@@ -200,7 +424,7 @@ function shareButtons({ s, holder, pageUrl, post }) {
  * every language, so a claim never has to write a page per locale and an old
  * badge gains the new languages by itself.
  */
-export function badgePage({ s, holder, badgeImage, bannerImage, postImage, courseUrl, pageUrl, recordUrl }) {
+export function badgePage({ s, holder, badgeImage, bannerImage, postImage, cloudityBanner, courseUrl, pageUrl, recordUrl }) {
   // The holder, not the raw record: a record written before names were stored
   // has only its key, and site.mjs is where that is filled in. Reading the
   // record here put "undefined" on the page while the index listed the person
@@ -266,7 +490,23 @@ export function badgePage({ s, holder, badgeImage, bannerImage, postImage, cours
       : []),
     ...(pageUrl ? shareSection({ s, holder, pageUrl, courseUrl, postImage }) : []),
     `[${s.badge.takeTheCourse}](${courseUrl}){ .md-button }`,
-    ""
+    "",
+    // A badge page is read by the holder's network, who never saw the course:
+    // it ends on who offers it
+    `## ${s.badge.cloudity.heading}`,
+    "",
+    ...s.badge.cloudity.body,
+    "",
+    s.badge.cloudity.link,
+    "",
+    // The same banner as the home page, wide and stacked: a screen shows the one it can read
+    ...(cloudityBanner
+      ? [
+          `[![${s.badge.cloudity.bannerAlt}](${cloudityBanner.wide}){ .cloudity-banner .wide-only loading=lazy }](${s.badge.cloudity.bannerUrl})`,
+          `[![${s.badge.cloudity.bannerAlt}](${cloudityBanner.narrow}){ .cloudity-banner .narrow-only loading=lazy }](${s.badge.cloudity.bannerUrl})`,
+          ""
+        ]
+      : [])
   ].join("\n");
 }
 
