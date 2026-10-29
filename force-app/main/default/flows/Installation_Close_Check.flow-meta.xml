@@ -13,12 +13,60 @@
             <isFieldError>false</isFieldError>
         </customErrorMessages>
     </customErrors>
+    <customErrors>
+        <description>US-041: refuses to close an installation while one of its handover checklist items is not done.</description>
+        <name>Checklist_Not_Complete</name>
+        <label>Checklist Not Complete</label>
+        <locationX>0</locationX>
+        <locationY>0</locationY>
+        <customErrorMessages>
+            <errorMessage>Complete every item of the handover checklist before closing this installation.</errorMessage>
+            <isFieldError>false</isFieldError>
+        </customErrorMessages>
+    </customErrors>
+    <customErrors>
+        <description>US-041: the handover checklist could not be read, so the installation is not closed rather than closed unchecked.</description>
+        <name>Checklist_Lookup_Failed</name>
+        <label>Checklist Lookup Failed</label>
+        <locationX>0</locationX>
+        <locationY>0</locationY>
+        <customErrorMessages>
+            <errorMessage>The handover checklist could not be checked: {!$Flow.FaultMessage}</errorMessage>
+            <isFieldError>false</isFieldError>
+        </customErrorMessages>
+    </customErrors>
+    <decisions>
+        <description>US-041: did the lookup find a handover item of this installation that is not done?</description>
+        <name>Open_Item_Found</name>
+        <label>Open Item Found</label>
+        <locationX>0</locationX>
+        <locationY>0</locationY>
+        <defaultConnectorLabel>Checklist complete</defaultConnectorLabel>
+        <rules>
+            <name>Item_Not_Done</name>
+            <conditionLogic>and</conditionLogic>
+            <conditions>
+                <leftValueReference>Get_Open_Handover_Item</leftValueReference>
+                <operator>IsNull</operator>
+                <rightValue>
+                    <booleanValue>false</booleanValue>
+                </rightValue>
+            </conditions>
+            <connector>
+                <targetReference>Checklist_Not_Complete</targetReference>
+            </connector>
+            <label>Item not done</label>
+        </rules>
+    </decisions>
     <decisions>
         <description>Was the installation ever given an install date?</description>
         <name>No_Install_Date</name>
         <label>No Install Date</label>
         <locationX>0</locationX>
         <locationY>0</locationY>
+        <defaultConnector>
+            <targetReference>Get_Open_Handover_Item</targetReference>
+        </defaultConnector>
         <defaultConnectorLabel>Install date set</defaultConnectorLabel>
         <rules>
             <name>Date_Missing</name>
@@ -36,7 +84,7 @@
             <label>Date missing</label>
         </rules>
     </decisions>
-    <description>An installation cannot be closed without an install date.</description>
+    <description>An installation cannot be closed without an install date, nor while its handover checklist is incomplete.</description>
     <environments>Default</environments>
     <interviewLabel>Installation Close Check {!$Flow.CurrentDateTime}</interviewLabel>
     <label>Installation Close Check</label>
@@ -53,6 +101,39 @@
         </value>
     </processMetadataValues>
     <processType>AutoLaunchedFlow</processType>
+    <recordLookups>
+        <description>US-041: looks for one handover item of this installation that is not done yet.</description>
+        <name>Get_Open_Handover_Item</name>
+        <label>Get Open Handover Item</label>
+        <locationX>0</locationX>
+        <locationY>0</locationY>
+        <assignNullValuesIfNoRecordsFound>false</assignNullValuesIfNoRecordsFound>
+        <connector>
+            <targetReference>Open_Item_Found</targetReference>
+        </connector>
+        <faultConnector>
+            <targetReference>Checklist_Lookup_Failed</targetReference>
+        </faultConnector>
+        <filterLogic>and</filterLogic>
+        <filters>
+            <field>Installation__c</field>
+            <operator>EqualTo</operator>
+            <value>
+                <elementReference>$Record.Id</elementReference>
+            </value>
+        </filters>
+        <filters>
+            <field>Is_Done__c</field>
+            <operator>EqualTo</operator>
+            <value>
+                <booleanValue>false</booleanValue>
+            </value>
+        </filters>
+        <getFirstRecordOnly>true</getFirstRecordOnly>
+        <object>Handover_Item__c</object>
+        <queriedFields>Id</queriedFields>
+        <storeOutputAutomatically>true</storeOutputAutomatically>
+    </recordLookups>
     <start>
         <locationX>0</locationX>
         <locationY>0</locationY>
