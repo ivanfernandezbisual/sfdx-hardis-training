@@ -2,6 +2,6 @@
 # Written by Set up my training environment, and editable in the
 # DevOps Pipeline panel: gear menu > Pipeline Settings, scope Branch: uat.
 targetUsername: test-bsfysjvukm1p@example.com
-instanceUrl: https://test.salesforce.com
+instanceUrl: https://enterprise-efficiency-5007-dev-ed.scratch.my.salesforce.com
 mergeTargets:
   - preprod
