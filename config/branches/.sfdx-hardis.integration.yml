@@ -9,7 +9,7 @@
 # which a real project would not do.
 
 targetUsername: test-blnwdngywtze@example.com
-instanceUrl: https://test.salesforce.com
+instanceUrl: https://customer-efficiency-2693-dev-ed.scratch.my.salesforce.com
 
 mergeTargets:
   - uat
